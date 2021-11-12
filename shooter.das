@@ -6,7 +6,9 @@ let
     BLOCK_SIZE = 32.0
     BLOCK_HEIGHT = 32.0
     MOVE_SPEED = 100.0
+    ENEMY_SPEED = 30.0
     ROTATION_SPEED = 5.0
+    DAMAGE = 20.0 
 
 struct Level
     size : uint
@@ -295,8 +297,6 @@ def move(var cam : Camera; forward : float; right : float; var level : Level con
     let level_ix = int(cell_y) * int(level.size) + int(cell_x)
     if level_ix < 0 || level_ix >= length(level.blocks) || level.blocks[level_ix] != 0 
         return
-
-
     cam.pos = new_pos
 
 def move(var cam : Camera; move_dir : float2; var level : Level const)
@@ -360,7 +360,23 @@ struct EnemyManager
     alive_tex : ImageHandle
     dead_tex : ImageHandle
 
-def init_enemies(alive_name : string; dead_name : string)
+struct Player
+    camera : Camera 
+    hp : float
+    damage_cooldown : float
+
+def init_player(pos : float2; angle : float) : Player
+    var player : Player
+    player.camera := create_camera(pos, angle, 90.f)
+    player.hp = 100.0
+    player.damage_cooldown = 0.0
+    return <- player
+
+def draw_stats(var player : Player const)
+    var s : string = "HP " + string(int(player.hp)) 
+    text_out(680, 30, s, 0xFFFFFFFF)
+
+def init_enemies(alive_name : string; dead_name : string) : EnemyManager
     var manager : EnemyManager
     manager.alive_tex <- create_managed_image(alive_name)
     manager.dead_tex <- create_managed_image(dead_name)
@@ -405,49 +421,87 @@ def update(var projectiles : ProjectileManager; var level : Level const; var ene
     projectiles.alive <- processed
     projectiles.cooldown = max(projectiles.cooldown - dt, 0.0)
 
-def update(var enemies : EnemyManager; var level : Level const; dt : float)
+def update(var enemies : EnemyManager; var player : Player; var level : Level const; dt : float)
     var processed : array<Enemy>
     processed |> reserve(length(enemies.alive))
+
+    sort(enemies.alive) <| $(var x : Enemy const; var y : Enemy const)
+        return length(x.sprite.pos - player.camera.pos) > length(y.sprite.pos - player.camera.pos)
+
     for elem in enemies.alive
         if elem.is_dead
             enemies.dead |> push(elem.sprite)
         else
+            let distance = length(player.camera.pos - elem.sprite.pos)
+            if distance > 30.f && distance < 300.0
+                let delta = dt * ENEMY_SPEED * normalize(player.camera.pos - elem.sprite.pos)
+                let new_pos = elem.sprite.pos + delta
+                let cell_pos = new_pos/BLOCK_SIZE
+
+                if cell_pos.x >= 0.0 && cell_pos.x < float(level.size) && cell_pos.y >= 0.0 && cell_pos.y < float(level.size)
+                    let index = int(cell_pos.y) * int(level.size) + int(cell_pos.x)
+                    if index >= 0 && index < int(level.size * level.size) && level.blocks[index] == 0
+                        elem.sprite.pos = new_pos
+            else
+                if player.damage_cooldown <= 0.00001
+                    player.hp -= DAMAGE
+                    player.damage_cooldown = 1.0
+
             processed |> push(elem)
 
     enemies.alive <- processed
 
+enum GameState
+    Run
+    Win
+    Dead
+
 var
     framebuffer : Framebuffer
-    player_camera : Camera
+    game_state : GameState = GameState Run
+    player : Player
     level : Level
     show_2d = false
     projectiles : ProjectileManager
     enemies : EnemyManager
 
+
+def reset_game()
+    game_state = GameState Run
+    player <- init_player(float2(10.f, 10.f), 0.f)
+    clear(enemies.dead)
+    clear(enemies.alive)
+    clear(projectiles.alive)
+
+    for x in range(2, 4)
+        for y in range(2, 4)
+            enemies |> spawn(float2(float(x) * BLOCK_SIZE + BLOCK_SIZE/2.0, float(y) * BLOCK_SIZE + BLOCK_SIZE/2.0))    
+    enemies |> spawn(float2(200.0, 16.0))
+    enemies |> spawn(float2(100.0, 150.0))
+
 [export]
 def initialize
     framebuffer <- create_framebuffer(SCREEN_WIDTH, SCREEN_HEIGHT)
 
-    level.size = 8u
+    level.size = 10u
     level.blocks <- to_array_move([[int[]
-        0; 0; 0; 0; 0; 0; 0; 0;
-        0; 1; 0; 0; 0; 1; 0; 0;
-        0; 0; 1; 0; 0; 0; 1; 0;
-        0; 0; 0; 0; 0; 0; 0; 0;
-        0; 0; 0; 0; 0; 0; 0; 0;
-        0; 1; 0; 0; 0; 1; 0; 0;
-        0; 0; 1; 0; 0; 0; 1; 0;
-        0; 0; 0; 0; 0; 0; 0; 0]])
+        0; 0; 0; 0; 0; 0; 0; 0; 0; 0;
+        0; 1; 1; 1; 0; 1; 0; 0; 0; 0;
+        0; 0; 0; 0; 0; 0; 1; 0; 1; 0;
+        0; 0; 0; 0; 0; 0; 0; 0; 1; 0;
+        0; 0; 0; 0; 0; 0; 1; 0; 1; 0;
+        0; 1; 0; 0; 0; 1; 0; 0; 1; 0;
+        0; 0; 1; 0; 0; 0; 1; 0; 1; 0;
+        0; 0; 1; 0; 0; 0; 0; 0; 0; 0;
+        0; 0; 1; 0; 0; 0; 1; 0; 0; 0;
+        0; 0; 0; 0; 0; 0; 0; 0; 0; 0]])
+
 
     level.wall_tex <- create_image("wall.png")
-
-    player_camera := create_camera(float2(10.f, 10.f), 0.f, 90.f)
-
     projectiles <- init_projectiles("missle.png")
     enemies <- init_enemies("enemy.png", "rip.png")
-    enemies |> spawn(float2(200.0, 16.0))
-    enemies |> spawn(float2(100.0, 150.0))
-
+    
+    reset_game()
     print("{get_screen_width()} {get_screen_height()}\n")
     return
 
@@ -455,6 +509,11 @@ def initialize
 def act(dt : float)
     if get_key(VK_ESCAPE)
         schedule_quit_game()
+
+    if game_state == GameState Win || game_state == GameState Dead
+        if get_key_press(VK_R)
+            reset_game()
+        return
 
     var move_dir := float2(0, 0)
     
@@ -471,7 +530,7 @@ def act(dt : float)
         show_2d = !show_2d
 
     if get_key(VK_E)
-        projectiles |> spawn(player_camera.pos, player_camera.dir)
+        projectiles |> spawn(player.camera.pos, player.camera.dir)
 
     var rotation = 0.0
 
@@ -480,33 +539,51 @@ def act(dt : float)
     if get_key(VK_RIGHT)
         rotation += 1.f
     
-    player_camera |> move(move_dir * MOVE_SPEED * dt, level)
-    player_camera |> rotate(rotation * ROTATION_SPEED * dt)
+    if player.damage_cooldown > 0.0
+        player.damage_cooldown -= dt
+
+    player.camera |> move(move_dir * MOVE_SPEED * dt, level)
+    player.camera |> rotate(rotation * ROTATION_SPEED * dt)
     projectiles |> update(level, enemies, dt)
-    enemies |> update(level, dt)
+    enemies |> update(player, level, dt)
+
+    if player.hp <= 0.0
+        game_state = GameState Dead
+    elif length(enemies.alive) == 0
+        game_state = GameState Win
+
     return
 
 [export]
 def draw
+
     if show_2d
         let level_size = BLOCK_SIZE * float(level.size)
         let scale = float2(float(get_screen_width())/level_size, float(get_screen_height())/level_size)
         transform2d_scale(min(scale.x, scale.y), float2(0.0, 0.0))
         level |> draw_2d
-        player_camera |> draw_2d(level)
+        player.camera |> draw_2d(level)
         transform2d_pop()
     else
         fill_rect(0, 0, get_screen_width(), get_screen_height(), 0x00000000)
         
         framebuffer |> clear_zbuffer()
-        player_camera |> draw_3d(level, framebuffer)
+        player.camera |> draw_3d(level, framebuffer)
 
-        framebuffer |> draw(player_camera, enemies)
-        framebuffer |> draw(player_camera, projectiles)
+        framebuffer |> draw(player.camera, enemies)
+        framebuffer |> draw(player.camera, projectiles)
         
         let scale = float(get_screen_height())/float(SCREEN_HEIGHT)
         let size = scale * float2(SCREEN_WIDTH, SCREEN_HEIGHT)
         let xoffset = max((float(get_screen_width()) - size.x)/2.0, 0.0)
 
         framebuffer.image |> draw_image(xoffset, 0.0, 0xFFFFFFFF, size)
+        player |> draw_stats()
+
+        if game_state == GameState Win
+            text_out(20, 20, "You win!", 0xFFFF0000)
+        elif game_state == GameState Dead
+            text_out(20, 20, "You lose", 0xFFFF0000)
+        if game_state != GameState Run
+            text_out(20, 50, "Press R to restart, ESC to quit", 0xFFFF0000)
     return
