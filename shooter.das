@@ -405,8 +405,16 @@ def update(var projectiles : ProjectileManager; var level : Level const; var ene
         elem.time -= dt
         if elem.time <= 0.0
             continue
+        
         elem.sprite.pos += elem.velocity * dt
         
+        let cell_pos = elem.sprite.pos/BLOCK_SIZE
+        let index = int(cell_pos.y) * int(level.size) + int(cell_pos.x)
+        
+        if cell_pos.x >= 0.0 && cell_pos.x < float(level.size) && cell_pos.y >= 0.0 && cell_pos.y < float(level.size)
+            if index >= 0 && index < int(level.size * level.size) && level.blocks[index] != 0
+                continue
+
         var projectile_destroyed = false 
 
         for enemy in enemies.alive
